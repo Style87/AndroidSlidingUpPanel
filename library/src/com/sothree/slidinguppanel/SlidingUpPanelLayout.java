@@ -1,6 +1,7 @@
 package com.sothree.slidinguppanel;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.content.res.TypedArray;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -113,12 +114,28 @@ public class SlidingUpPanelLayout extends ViewGroup {
     private View mSlideableView;
 
     /**
+     * The main child view.
+     */
+    private View mMainView;
+    
+    /**
+     * True if the main view should be resized to fill the remaining space when mSlideableView is expanded.
+     */
+    private boolean mResizeMainView = false;
+    
+    /**
+     * True if the main view should be resized to fill the remaining space when mSlideableView is expanded.
+     */
+    private boolean mCollapseOnRotate = false;
+
+    /**
      * Current state of the slideable view.
      */
     private enum SlideState {
         EXPANDED,
         COLLAPSED,
-        ANCHORED
+        ANCHORED,
+        MANUAL
     }
     private SlideState mSlideState = SlideState.COLLAPSED;
 
@@ -171,6 +188,12 @@ public class SlidingUpPanelLayout extends ViewGroup {
      * instance state save/restore.
      */
     private boolean mFirstLayout = true;
+
+    /**
+     * Stores the current orientation.
+     */
+    private int mOrientation;
+
 
     private final Rect mTmpRect = new Rect();
 
@@ -253,6 +276,11 @@ public class SlidingUpPanelLayout extends ViewGroup {
                 mCoveredFadeColor = ta.getColor(R.styleable.SlidingUpPanelLayout_fadeColor, DEFAULT_FADE_COLOR);
 
                 mDragViewResId = ta.getResourceId(R.styleable.SlidingUpPanelLayout_dragView, -1);
+                
+                mResizeMainView = ta.getBoolean(R.styleable.SlidingUpPanelLayout_resizeMainView, false);
+
+                mCollapseOnRotate = ta.getBoolean(R.styleable.SlidingUpPanelLayout_collapseOnRotate, false);
+
             }
 
             ta.recycle();
@@ -273,6 +301,8 @@ public class SlidingUpPanelLayout extends ViewGroup {
 
         mCanSlide = true;
         mIsSlidingEnabled = true;
+
+        mOrientation = context.getResources().getConfiguration().orientation;
 
         ViewConfiguration vc = ViewConfiguration.get(context);
         mScrollTouchSlop = vc.getScaledTouchSlop();
@@ -486,6 +516,10 @@ public class SlidingUpPanelLayout extends ViewGroup {
                 continue;
             }
 
+            if (i == 0) {
+                mMainView = child;
+            }
+
             if (i == 1) {
                 lp.slideable = true;
                 lp.dimWhenOffset = true;
@@ -540,6 +574,15 @@ public class SlidingUpPanelLayout extends ViewGroup {
                 break;
             }
         }
+
+		if (mOrientation != getResources().getConfiguration().orientation) {
+			if (mCollapseOnRotate) {
+				mSlideOffset = 1.f;
+				setSlideState();
+			}
+			
+			mOrientation = getResources().getConfiguration().orientation;
+		}
 
         for (int i = 0; i < childCount; i++) {
             final View child = getChildAt(i);
@@ -721,6 +764,7 @@ public class SlidingUpPanelLayout extends ViewGroup {
 
     private boolean expandPane(View pane, int initialVelocity, float mSlideOffset) {
         if (mFirstLayout || smoothSlideTo(mSlideOffset, initialVelocity)) {
+			setSlideState();
             return true;
         }
         return false;
@@ -728,6 +772,7 @@ public class SlidingUpPanelLayout extends ViewGroup {
 
     private boolean collapsePane(View pane, int initialVelocity) {
         if (mFirstLayout || smoothSlideTo(1.f, initialVelocity)) {
+			setSlideState();
             return true;
         }
         return false;
@@ -793,6 +838,24 @@ public class SlidingUpPanelLayout extends ViewGroup {
     public boolean isAnchored() {
         return mSlideState == SlideState.ANCHORED;
     }
+
+    /**
+	 * Check if the layout is collapsed.
+	 * 
+	 * @return true if sliding panels are collapsed
+	 */
+	public boolean isCollapsed() {
+		return mSlideState == SlideState.COLLAPSED;
+	}
+
+    /**
+	 * Check if the layout is manually set.
+	 * 
+	 * @return true if sliding panels are manually set
+	 */
+	public boolean isManual() {
+		return mSlideState == SlideState.MANUAL;
+	}
 
     /**
      * Check if the content in this layout cannot fully fit side by side and therefore
@@ -931,6 +994,12 @@ public class SlidingUpPanelLayout extends ViewGroup {
         }
         final int left = mSlideableView.getLeft();
 
+		if (mResizeMainView) {
+			android.view.ViewGroup.LayoutParams mMainViewLayoutParams = mMainView.getLayoutParams();
+			mMainViewLayoutParams.height = bottom;
+			mMainView.setLayoutParams(mMainViewLayoutParams);
+		}
+
         if (mShadowDrawable != null) {
             mShadowDrawable.setBounds(left, top, right, bottom);
             mShadowDrawable.draw(c);
@@ -968,6 +1037,33 @@ public class SlidingUpPanelLayout extends ViewGroup {
         return checkV && ViewCompat.canScrollHorizontally(v, -dx);
     }
 
+    /**
+	 * Sets the slide state based on mSlideOffset.
+	 * 
+	 */
+	public void setSlideState() {
+		int anchoredTop = (int) (mAnchorPoint * mSlideRange);
+
+		if (mDragHelper.getViewDragState() == ViewDragHelper.STATE_IDLE) {
+			if (mSlideOffset == 0) {
+				if (!isExpanded()) {
+					mSlideState = SlideState.EXPANDED;
+				}
+			} else if (mSlideOffset == (float) anchoredTop / (float) mSlideRange) {
+				if (!isAnchored()) {
+					mSlideState = SlideState.ANCHORED;
+				}
+			} else if (mSlideOffset == 1) {
+				if (!isCollapsed()) {
+					mSlideState = SlideState.COLLAPSED;
+				}
+			} else if (!isManual()) {
+				mSlideState = SlideState.MANUAL;
+			} else {
+				Log.e(TAG, "Error setting state.");
+			}
+		}
+	}
 
     @Override
     protected ViewGroup.LayoutParams generateDefaultLayoutParams() {
@@ -1036,10 +1132,16 @@ public class SlidingUpPanelLayout extends ViewGroup {
                         dispatchOnPanelAnchored(mSlideableView);
                         mSlideState = SlideState.ANCHORED;
                     }
-                } else if (mSlideState != SlideState.COLLAPSED) {
-                    dispatchOnPanelCollapsed(mSlideableView);
-                    mSlideState = SlideState.COLLAPSED;
-                }
+                } else if (mSlideOffset == 1) {
+					if (mSlideState != SlideState.COLLAPSED) {
+						dispatchOnPanelCollapsed(mSlideableView);
+						mSlideState = SlideState.COLLAPSED;
+					}
+				} else if (mSlideState != SlideState.MANUAL) {
+					updateObscuredViewVisibility();
+					dispatchOnPanelAnchored(mSlideableView);
+					mSlideState = SlideState.MANUAL;
+				}
             }
         }
 
